@@ -66,4 +66,4 @@ def generate2(limit:int, filename:str, *start_words:str)-> str:
         predecessor = append_shift_left(predecessor, chosenWord)
     return SPACE.join(output)
 
-print(generate2(50, tolstoy, "to", "go", "to"))
+print(generate2(50, tolstoy, "group", "of"))
