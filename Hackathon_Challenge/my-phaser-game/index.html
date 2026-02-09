@@ -1,207 +1,219 @@
-<!doctype html> 
-<html lang="en"> 
-<head> 
-    <meta charset="UTF-8" />
-    <title>Making your first Phaser 3 Game - Part 10</title>
-    <script src="//cdn.jsdelivr.net/npm/phaser@3.11.0/dist/phaser.js"></script>
-    <style type="text/css">
-        body {
-            margin: 0;
-        }
-    </style>
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Space Invaders — Phaser 3 (single file)</title>
+  <style>
+    html, body { height: 100%; margin: 0; background: #0a0f1e; }
+    #game { width: 100%; height: 100%; }
+    .hint { position: fixed; left: 0; right: 0; bottom: 8px; text-align: center; color: #a3bffa; font: 12px/1 system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; opacity: .8; pointer-events: none; }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/phaser@3.60.0/dist/phaser.js"></script>
 </head>
 <body>
+  <div id="game"></div>
+  <div class="hint">Move: ◀︎▶︎  •  Fire: Space / Tap</div>
 
-<script type="text/javascript">
+<script>
+(() => {
+  const W = 800, H = 600;
 
-var config = {
+  const config = {
     type: Phaser.AUTO,
-    width: 800,
-    height: 600,
-    physics: {
-        default: 'arcade',
-        arcade: {
-            gravity: { y: 300 },
-            debug: false
-        }
-    },
-    scene: {
-        preload: preload,
-        create: create,
-        update: update
-    }
-};
+    parent: 'game',
+    backgroundColor: '#0a0f1e',
+    scale: { mode: Phaser.Scale.FIT, autoCenter: Phaser.Scale.CENTER_BOTH, width: W, height: H },
+    physics: { default: 'arcade', arcade: { debug: false } },
+    scene: { preload, create, update }
+  };
 
-var player;
-var stars;
-var bombs;
-var platforms;
-var cursors;
-var score = 0;
-var gameOver = false;
-var scoreText;
+  const game = new Phaser.Game(config);
 
-var game = new Phaser.Game(config);
+  // Gameplay state
+  let player, cursors, fireKey, bullets, enemies, enemyDir = 1, lastFired = 0, fireRate = 220;
+  let score = 0, scoreText, lives = 3, livesText, gameOver = false, shields;
 
-function preload ()
-{
-    this.load.image('sky', 'assets/sky.png');
-    this.load.image('ground', 'assets/platform.png');
-    this.load.image('star', 'assets/star.png');
-    this.load.image('bomb', 'assets/bomb.png');
-    this.load.spritesheet('dude', 'assets/dude.png', { frameWidth: 32, frameHeight: 48 });
-}
+  function preload() {
+    const g = this.make.graphics({ x: 0, y: 0, add: false });
 
-function create ()
-{
-    //  A simple background for our game
-    this.add.image(400, 300, 'sky');
+    // Player (triangle)
+    g.fillStyle(0x58ffb2, 1);
+    g.beginPath(); g.moveTo(16, 0); g.lineTo(32, 28); g.lineTo(0, 28); g.closePath(); g.fillPath();
+    g.generateTexture('player', 32, 28); g.clear();
 
-    //  The platforms group contains the ground and the 2 ledges we can jump on
-    platforms = this.physics.add.staticGroup();
+    // Bullet
+    g.fillStyle(0xfff275, 1); g.fillRect(0, 0, 4, 14); g.generateTexture('bullet', 4, 14); g.clear();
 
-    //  Here we create the ground.
-    //  Scale it to fit the width of the game (the original sprite is 400x32 in size)
-    platforms.create(400, 568, 'ground').setScale(2).refreshBody();
+    // Enemy
+    g.fillStyle(0x9aa4ff, 1); g.fillRect(0, 0, 28, 20); g.generateTexture('invader', 28, 20); g.clear();
 
-    //  Now let's create some ledges
-    platforms.create(600, 400, 'ground');
-    platforms.create(50, 250, 'ground');
-    platforms.create(750, 220, 'ground');
+    // Shield block
+    g.fillStyle(0x47d1ff, 1); g.fillRect(0, 0, 16, 12); g.generateTexture('shield', 16, 12); g.clear();
+  }
 
-    // The player and its settings
-    player = this.physics.add.sprite(100, 450, 'dude');
+  function create() {
+    // Stars background
+    this.add.particles(0, 0, 'bullet', {
+      speed: 10, lifespan: 4000, quantity: 1, frequency: 60, 
+      scale: { start: 0.4, end: 0.1 }, alpha: { start: 0.3, end: 0 }, 
+      angle: { min: 260, max: 280 }, x: { min: 0, max: W }, y: 0, tint: 0x7aa2ff
+    }).setDepth(-1);
 
-    //  Player physics properties. Give the little guy a slight bounce.
-    player.setBounce(0.2);
+    // Player
+    player = this.physics.add.sprite(W/2, H - 60, 'player');
     player.setCollideWorldBounds(true);
 
-    //  Our player animations, turning, walking left and walking right.
-    this.anims.create({
-        key: 'left',
-        frames: this.anims.generateFrameNumbers('dude', { start: 0, end: 3 }),
-        frameRate: 10,
-        repeat: -1
-    });
-
-    this.anims.create({
-        key: 'turn',
-        frames: [ { key: 'dude', frame: 4 } ],
-        frameRate: 20
-    });
-
-    this.anims.create({
-        key: 'right',
-        frames: this.anims.generateFrameNumbers('dude', { start: 5, end: 8 }),
-        frameRate: 10,
-        repeat: -1
-    });
-
-    //  Input Events
+    // Input
     cursors = this.input.keyboard.createCursorKeys();
+    fireKey = this.input.keyboard.addKey(Phaser.Input.Keyboard.KeyCodes.SPACE);
+    this.input.on('pointerdown', tryFire, this);
 
-    //  Some stars to collect, 12 in total, evenly spaced 70 pixels apart along the x axis
-    stars = this.physics.add.group({
-        key: 'star',
-        repeat: 11,
-        setXY: { x: 12, y: 0, stepX: 70 }
+    // Bullets
+    bullets = this.physics.add.group({ classType: Phaser.Physics.Arcade.Image, maxSize: 30, runChildUpdate: false });
+
+    // Enemies grid
+    enemies = this.physics.add.group({ immovable: true });
+    const rows = 4, cols = 10, hGap = 50, vGap = 40, startX = (W - (cols - 1) * hGap) / 2, startY = 110;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const x = startX + c * hGap, y = startY + r * vGap;
+        const e = enemies.create(x, y, 'invader');
+        e.setData('points', (rows - r) * 10);
+      }
+    }
+
+    // Shields
+    shields = this.physics.add.staticGroup();
+    placeShield(this, 150, H - 150);
+    placeShield(this, W/2, H - 150);
+    placeShield(this, W - 150, H - 150);
+
+    // UI
+    scoreText = this.add.text(20, 16, 'Score: 0', { font: '16px monospace', color: '#e2e8f0' });
+    livesText = this.add.text(W - 20, 16, 'Lives: 3', { font: '16px monospace', color: '#e2e8f0' }).setOrigin(1, 0);
+
+    // Collisions
+    this.physics.add.overlap(bullets, enemies, onBulletHitsEnemy, null, this);
+    this.physics.add.overlap(bullets, shields, onBulletHitsShield, null, this);
+
+    // Enemy reaches player line -> lose life
+    this.time.addEvent({ delay: 250, loop: true, callback: () => {
+      enemies.children.iterate((e) => {
+        if (!e) return;
+        if (e.y >= H - 120) damagePlayer.call(this);
+      });
+    }});
+
+    // Restart key
+    this.input.keyboard.on('keydown-R', () => { if (gameOver) this.scene.restart(); });
+  }
+
+  function placeShield(scene, cx, cy) {
+    const pattern = [
+      '  xxxx  ',
+      ' xxxxxx ',
+      'xxxxxxxx',
+      'xxx  xxx',
+      'xx    xx'
+    ];
+    const blockW = 16, blockH = 12;
+    pattern.forEach((row, r) => {
+      [...row].forEach((ch, c) => {
+        if (ch === 'x') shields.create(cx + (c - row.length/2) * blockW, cy + r * blockH, 'shield').refreshBody();
+      });
     });
+  }
 
-    stars.children.iterate(function (child) {
+  function update(time, delta) {
+    if (gameOver) return;
 
-        //  Give each star a slightly different bounce
-        child.setBounceY(Phaser.Math.FloatBetween(0.4, 0.8));
+    // Player movement
+    const speed = 260;
+    player.setVelocityX((cursors.left.isDown ? -1 : 0) * speed + (cursors.right.isDown ? 1 : 0) * speed);
 
+    // Fire
+    if (Phaser.Input.Keyboard.JustDown(fireKey)) tryFire.call(this);
+
+    // Enemy marching
+    let hitEdge = false;
+    enemies.children.iterate((e) => {
+      if (!e || !e.active) return;
+      e.x += enemyDir * 0.08 * delta; // frame-rate independent
+      if (e.x <= 30 || e.x >= W - 30) hitEdge = true;
     });
-
-    bombs = this.physics.add.group();
-
-    //  The score
-    scoreText = this.add.text(16, 16, 'score: 0', { fontSize: '32px', fill: '#000' });
-
-    //  Collide the player and the stars with the platforms
-    this.physics.add.collider(player, platforms);
-    this.physics.add.collider(stars, platforms);
-    this.physics.add.collider(bombs, platforms);
-
-    //  Checks to see if the player overlaps with any of the stars, if he does call the collectStar function
-    this.physics.add.overlap(player, stars, collectStar, null, this);
-
-    this.physics.add.collider(player, bombs, hitBomb, null, this);
-}
-
-function update ()
-{
-    if (gameOver)
-    {
-        return;
+    if (hitEdge) {
+      enemyDir *= -1;
+      enemies.children.iterate((e) => { if (e && e.active) e.y += 10; });
     }
 
-    if (cursors.left.isDown)
-    {
-        player.setVelocityX(-160);
+    // Clean bullets that leave screen
+    bullets.children.each((b) => { if (b.active && b.y < -20) b.disableBody(true, true); });
 
-        player.anims.play('left', true);
+    // Check victory
+    if (enemies.countActive(true) === 0) {
+      waveCleared.call(this);
     }
-    else if (cursors.right.isDown)
-    {
-        player.setVelocityX(160);
+  }
 
-        player.anims.play('right', true);
-    }
-    else
-    {
-        player.setVelocityX(0);
+  function tryFire() {
+    const t = this.time.now;
+    if (t < lastFired + fireRate) return;
+    lastFired = t;
+    const b = bullets.get(player.x, player.y - 26, 'bullet');
+    if (!b) return;
+    b.setActive(true).setVisible(true);
+    b.body.enable = true;
+    b.setVelocityY(-480);
+  }
 
-        player.anims.play('turn');
-    }
-
-    if (cursors.up.isDown && player.body.touching.down)
-    {
-        player.setVelocityY(-330);
-    }
-}
-
-function collectStar (player, star)
-{
-    star.disableBody(true, true);
-
-    //  Add and update the score
-    score += 10;
+  function onBulletHitsEnemy(bullet, enemy) {
+    bullet.disableBody(true, true);
+    enemy.disableBody(true, true);
+    score += enemy.getData('points') || 10;
     scoreText.setText('Score: ' + score);
+  }
 
-    if (stars.countActive(true) === 0)
-    {
-        //  A new batch of stars to collect
-        stars.children.iterate(function (child) {
+  function onBulletHitsShield(bullet, shield) {
+    bullet.disableBody(true, true);
+    shield.destroy();
+  }
 
-            child.enableBody(true, child.x, 0, true, true);
+  function damagePlayer() {
+    if (gameOver) return;
+    lives -= 1; livesText.setText('Lives: ' + lives);
+    flash(this, player);
+    enemies.children.iterate((e) => { if (e && e.active) e.y -= 20; });
+    if (lives <= 0) endGame.call(this, false);
+  }
 
-        });
-
-        var x = (player.x < 400) ? Phaser.Math.Between(400, 800) : Phaser.Math.Between(0, 400);
-
-        var bomb = bombs.create(x, 16, 'bomb');
-        bomb.setBounce(1);
-        bomb.setCollideWorldBounds(true);
-        bomb.setVelocity(Phaser.Math.Between(-200, 200), 20);
-        bomb.allowGravity = false;
-
+  function waveCleared() {
+    // New wave: rebuild enemies, slightly faster fire rate
+    const cols = 11, rows = 5, hGap = 48, vGap = 36, startX = (W - (cols - 1) * hGap) / 2, startY = 90;
+    for (let r = 0; r < rows; r++) {
+      for (let c = 0; c < cols; c++) {
+        const x = startX + c * hGap, y = startY + r * vGap;
+        const e = enemies.create(x, y, 'invader');
+        e.setData('points', (rows - r) * 10 + 5);
+      }
     }
-}
+    fireRate = Math.max(120, fireRate - 15);
+  }
 
-function hitBomb (player, bomb)
-{
-    this.physics.pause();
+  function endGame(win) {
+    let gameOver = true;
+    const msg = win ? 'YOU WIN' : 'GAME OVER';
+    const sub = 'Refresh Window to Restart';
+    const m = this.add.text(W/2, H/2, msg, { font: '48px monospace', color: '#ffffff' }).setOrigin(0.5);
+    const s = this.add.text(W/2, H/2 + 56, sub, { font: '18px monospace', color: '#c0caf5' }).setOrigin(0.5);
+    m.setAlpha(0).setScale(0.9); s.setAlpha(0);
+    this.tweens.add({ targets: [m, s], alpha: 1, scale: 1, duration: 400, ease: 'sine.out' });
+  }
 
-    player.setTint(0xff0000);
-
-    player.anims.play('turn');
-
-    gameOver = true;
-}
-
+  function flash(scene, obj) {
+    scene.tweens.add({ targets: obj, alpha: 0.2, yoyo: true, repeat: 3, duration: 80 });
+  }
+})();
 </script>
-
 </body>
 </html>
